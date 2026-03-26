@@ -2140,7 +2140,13 @@ body {
   align-items: center;
   gap: 4px;
   font-size: 10px;
-  color: #888;\n  background: #2a2a2a;\n  border: 1px solid #444;\n  padding: 1px 6px;\n  border-radius: 8px;\n  margin-top: 4px;\n}
+  color: #888;
+  background: #2a2a2a;
+  border: 1px solid #444;
+  padding: 1px 6px;
+  border-radius: 8px;
+  margin-top: 4px;
+}
 .gh-readonly-notice {
   font-size: 11.5px;
   color: #888;
