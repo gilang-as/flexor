@@ -8,6 +8,7 @@
     <img src="https://img.shields.io/badge/react-19-61DAFB?logo=react" alt="React" />
     <img src="https://img.shields.io/badge/provider-MikroTik-orange" alt="MikroTik" />
     <img src="https://img.shields.io/badge/status-active-brightgreen" alt="Status" />
+    <a href="LICENSE"><img src="https://img.shields.io/badge/license-GPL--2.0-blue" alt="License" /></a>
   </p>
 </div>
 
