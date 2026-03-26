@@ -13,6 +13,7 @@ interface Props {
   onSave: (path: string, content: string) => void
   navigateTo: { line: number; token: number } | null
   simConfig: SimConfig
+  templateFiles: Record<string, string>
 }
 
 const CloseIcon = () => (
@@ -30,7 +31,7 @@ const BrowserTabIcon = () => (
 )
 
 export default function EditorArea({
-  tabs, activeTabPath, onTabSelect, onTabClose, onMarkDirty, onSave, navigateTo, simConfig,
+  tabs, activeTabPath, onTabSelect, onTabClose, onMarkDirty, onSave, navigateTo, simConfig, templateFiles,
 }: Props) {
   // Use refs so Monaco command callbacks always see latest values without re-registering
   const editorRef = useRef<Parameters<OnMount>[0] | null>(null)
@@ -117,7 +118,7 @@ export default function EditorArea({
 
       <div className="editor-body">
         {activeTab && activeTab.fileType === 'browser' && (
-          <VirtualBrowser simConfig={simConfig} />
+          <VirtualBrowser simConfig={simConfig} templateFiles={templateFiles} />
         )}
         {activeTab && activeTab.fileType === 'image' && (
           <ImagePreview key={activeTab.path} src={activeTab.content} name={activeTab.name} />

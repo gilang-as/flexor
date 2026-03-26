@@ -10,7 +10,10 @@ package main
 
 import (
 	"encoding/json"
+	"io"
+	"io/fs"
 	"syscall/js"
+	"time"
 
 	hs "gopkg.gilang.dev/mikrotik/hotspot"
 )
@@ -23,15 +26,17 @@ func main() {
 		// hotspot.init(config)          — initialise / re-initialise the portal
 		"init": js.FuncOf(apiInit),
 		// hotspot.checkAccess(ip, cookie, url) → PortalResponse
-		// Intercept any browser navigation; returns action=="allow" if already logged in.
 		"checkAccess": js.FuncOf(apiCheckAccess),
 		// hotspot.handle(ip, cookie, path, method, formJSON, queryJSON, target) → PortalResponse
-		// Drive a specific portal page directly (login POST, status GET, etc.)
 		"handle": js.FuncOf(apiHandle),
 		// hotspot.getStatus(ip, cookie) → SessionStatus | null
 		"getStatus": js.FuncOf(apiGetStatus),
 		// hotspot.isLoggedIn(ip, cookie) → boolean
 		"isLoggedIn": js.FuncOf(apiIsLoggedIn),
+		// hotspot.recordTraffic(ip, cookie, bytesIn, bytesOut) — accumulate traffic bytes
+		"recordTraffic": js.FuncOf(apiRecordTraffic),
+		// hotspot.setAdvertDone(ip, cookie) — unblock session after advertisement
+		"setAdvertDone": js.FuncOf(apiSetAdvertDone),
 	}))
 
 	// Keep the Go runtime alive forever.
@@ -45,14 +50,20 @@ func main() {
 // JS:
 //
 //	hotspot.init({
-//	  serverName?: string,   // default "hotspot1"
-//	  hostname?:   string,   // default "localhost:8080"
-//	  identity?:   string,   // default "MikroTik"
-//	  allowTrial?: boolean,
-//	  users?: Array<{ username: string, password: string }>,
+//	  serverName?:    string,
+//	  hostname?:      string,
+//	  identity?:      string,
+//	  allowTrial?:    boolean,
+//	  advertRequired?: boolean,
+//	  advertUrl?:     string,
+//	  users?:         Array<{ username: string, password: string, profileId?: string }>,
+//	  profiles?:      Array<{ id: string, sessionTimeout?: string }>,
+//	  templates?:     Record<string, string>, // filename → HTML/text content
 //	})
 func apiInit(_ js.Value, args []js.Value) any {
 	cfg := hs.DefaultConfig()
+
+	var fsys fs.FS // nil = no templates; portal will return "Template not found"
 
 	if len(args) > 0 && args[0].Type() == js.TypeObject {
 		obj := args[0]
@@ -69,25 +80,99 @@ func apiInit(_ js.Value, args []js.Value) any {
 		if v := obj.Get("allowTrial"); v.Type() == js.TypeBoolean {
 			cfg.AllowTrial = v.Bool()
 		}
+		if v := obj.Get("advertRequired"); v.Type() == js.TypeBoolean {
+			cfg.AdvertRequired = v.Bool()
+		}
+		if v := obj.Get("advertUrl"); v.Type() == js.TypeString {
+			cfg.AdvertURL = v.String()
+		}
+
+		// Build in-memory FS from JS templates map.
+		// Keys are relative filenames (e.g. "login.html", "lv/login.html").
+		// They are stored under cfg.TemplateDir so portal.readTemplate finds them.
+		templatesJS := obj.Get("templates")
+		if templatesJS.Type() == js.TypeObject {
+			mfs := make(mapFS)
+			keys := js.Global().Get("Object").Call("keys", templatesJS)
+			for i := 0; i < keys.Length(); i++ {
+				key := keys.Index(i).String()
+				content := templatesJS.Get(key).String()
+				mfs[cfg.TemplateDir+"/"+key] = []byte(content)
+			}
+			if len(mfs) > 0 {
+				fsys = mfs
+			}
+		}
 	}
 
-	// Always use embedded templates — WASM runs in the browser, no disk access.
-	portal = hs.NewPortalWithFS(cfg, hs.DefaultTemplates)
+	portal = hs.NewPortalWithFS(cfg, fsys)
 
 	if len(args) > 0 && args[0].Type() == js.TypeObject {
-		users := args[0].Get("users")
+		obj := args[0]
+
+		// Register profiles before users so profile limits are available at login.
+		profiles := obj.Get("profiles")
+		if profiles.Type() == js.TypeObject && profiles.InstanceOf(js.Global().Get("Array")) {
+			for i := 0; i < profiles.Length(); i++ {
+				p := profiles.Index(i)
+				id := p.Get("id").String()
+				if id == "" {
+					continue
+				}
+				pc := &hs.ProfileConfig{}
+				if v := p.Get("sessionTimeout"); v.Type() == js.TypeString && v.String() != "" {
+					if d, err := time.ParseDuration(v.String()); err == nil {
+						pc.SessionTimeout = d
+					}
+				}
+				portal.AddProfile(id, pc)
+			}
+		}
+
+		users := obj.Get("users")
 		if users.Type() == js.TypeObject && users.InstanceOf(js.Global().Get("Array")) {
 			for i := 0; i < users.Length(); i++ {
 				u := users.Index(i)
 				username := u.Get("username").String()
 				password := u.Get("password").String()
+				profileID := ""
+				if v := u.Get("profileId"); v.Type() == js.TypeString {
+					profileID = v.String()
+				}
 				if username != "" {
-					portal.AddUser(username, password)
+					portal.AddUserWithProfile(username, password, profileID)
 				}
 			}
 		}
 	}
 
+	return nil
+}
+
+// apiRecordTraffic accumulates traffic bytes for a session.
+//
+// JS: hotspot.recordTraffic(clientIP: string, cookie: string, bytesIn: number, bytesOut: number)
+func apiRecordTraffic(_ js.Value, args []js.Value) any {
+	ensureInit()
+	ip := strArg(args, 0)
+	bytesIn := int64(0)
+	bytesOut := int64(0)
+	if len(args) > 2 && args[2].Type() == js.TypeNumber {
+		bytesIn = int64(args[2].Int())
+	}
+	if len(args) > 3 && args[3].Type() == js.TypeNumber {
+		bytesOut = int64(args[3].Int())
+	}
+	portal.RecordTraffic(ip, bytesIn, bytesOut)
+	return nil
+}
+
+// apiSetAdvertDone unblocks a session after the client has watched the advertisement.
+//
+// JS: hotspot.setAdvertDone(clientIP: string, cookie: string)
+func apiSetAdvertDone(_ js.Value, args []js.Value) any {
+	ensureInit()
+	portal.SetAdvertDone(strArg(args, 0))
 	return nil
 }
 
@@ -126,8 +211,6 @@ func apiHandle(_ js.Value, args []js.Value) any {
 // apiGetStatus returns session statistics for the current client.
 //
 // JS: hotspot.getStatus(clientIP: string, cookie: string) → SessionStatus | null
-//
-// SessionStatus: { loggedIn, username, ip, mac, loginBy, uptime, uptimeSec, bytesIn, bytesOut }
 func apiGetStatus(_ js.Value, args []js.Value) any {
 	ensureInit()
 	clientIP := strArg(args, 0)
@@ -140,16 +223,23 @@ func apiGetStatus(_ js.Value, args []js.Value) any {
 	if sess == nil {
 		return nil
 	}
+	uptime := sess.Uptime()
+	timeLeft := sess.SessionTimeLeft()
 	return map[string]any{
-		"loggedIn":  sess.LoggedIn,
-		"username":  sess.Username,
-		"ip":        sess.IP,
-		"mac":       sess.MAC,
-		"loginBy":   sess.LoginBy,
-		"uptime":    sess.Uptime().String(),
-		"uptimeSec": int(sess.Uptime().Seconds()),
-		"bytesIn":   sess.BytesIn,
-		"bytesOut":  sess.BytesOut,
+		"loggedIn":           sess.LoggedIn,
+		"username":           sess.Username,
+		"ip":                 sess.IP,
+		"mac":                sess.MAC,
+		"loginBy":            sess.LoginBy,
+		"uptime":             hs.FormatDuration(uptime),
+		"uptimeSec":          int(uptime.Seconds()),
+		"bytesIn":            sess.BytesIn,
+		"bytesOut":           sess.BytesOut,
+		"sessionTimeLeft":    hs.FormatDuration(timeLeft),
+		"sessionTimeLeftSec": int(timeLeft.Seconds()),
+		"blocked":            sess.Blocked,
+		"limitBytesIn":       sess.LimitBytesIn,
+		"limitBytesOut":      sess.LimitBytesOut,
 	}
 }
 
@@ -198,3 +288,41 @@ func responseToJS(resp hs.PortalResponse) map[string]any {
 		"targetURL": resp.TargetURL,
 	}
 }
+
+// ---- In-memory FS -------------------------------------------------------
+
+// mapFS is a minimal read-only in-memory file system backed by a flat map.
+// Keys are slash-separated paths (no leading slash), values are file contents.
+type mapFS map[string][]byte
+
+func (m mapFS) Open(name string) (fs.File, error) {
+	data, ok := m[name]
+	if !ok {
+		return nil, &fs.PathError{Op: "open", Path: name, Err: fs.ErrNotExist}
+	}
+	return &mapFile{name: name, data: data}, nil
+}
+
+type mapFile struct {
+	name string
+	data []byte
+	pos  int
+}
+
+func (f *mapFile) Read(p []byte) (int, error) {
+	if f.pos >= len(f.data) {
+		return 0, io.EOF
+	}
+	n := copy(p, f.data[f.pos:])
+	f.pos += n
+	return n, nil
+}
+
+func (f *mapFile) Close() error               { return nil }
+func (f *mapFile) Stat() (fs.FileInfo, error) { return f, nil }
+func (f *mapFile) Name() string               { return f.name }
+func (f *mapFile) Size() int64                { return int64(len(f.data)) }
+func (f *mapFile) Mode() fs.FileMode          { return 0o444 }
+func (f *mapFile) ModTime() time.Time         { return time.Time{} }
+func (f *mapFile) IsDir() bool                { return false }
+func (f *mapFile) Sys() any                   { return nil }

@@ -127,3 +127,31 @@ export async function searchInDirectory(
   }
   return results
 }
+
+/**
+ * Recursively read all text files from a directory handle.
+ * Returns a flat map of { relativePath: textContent }.
+ * Binary and ignored files are skipped.
+ */
+export async function readTextFiles(
+  dirHandle: FileSystemDirectoryHandle,
+  basePath = '',
+): Promise<Record<string, string>> {
+  const result: Record<string, string> = {}
+  for await (const [name, handle] of dirHandle.entries()) {
+    if (IGNORE.has(name)) continue
+    const filePath = basePath ? `${basePath}/${name}` : name
+    if (handle.kind === 'directory') {
+      const sub = await readTextFiles(handle as FileSystemDirectoryHandle, filePath)
+      Object.assign(result, sub)
+    } else if (isTextFile(name)) {
+      try {
+        const file = await (handle as FileSystemFileHandle).getFile()
+        result[filePath] = await file.text()
+      } catch {
+        // skip unreadable files
+      }
+    }
+  }
+  return result
+}

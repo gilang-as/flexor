@@ -1437,3 +1437,196 @@ body {
   font-size: 11px;
   color: #555;
 }
+
+/* ── Viewport framed & iframe ─────────────────── */
+.vbrowser-viewport-framed {
+  align-items: stretch;
+  justify-content: stretch;
+  padding: 0;
+  overflow: hidden;
+}
+
+.vbrowser-iframe {
+  width: 100%;
+  height: 100%;
+  border: none;
+  display: block;
+  background: #fff;
+}
+
+/* ── Access-Granted page (kept for backward compat) ─────────────── */
+.vbrowser-allowed {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 48px 32px;
+  text-align: center;
+  max-width: 480px;
+  margin: auto;
+}
+
+.vbrowser-allowed-icon {
+  margin-bottom: 4px;
+}
+
+.vbrowser-allowed-title {
+  font-size: 22px;
+  font-weight: 700;
+  color: #89d185;
+  letter-spacing: -0.3px;
+}
+
+.vbrowser-allowed-url {
+  font-size: 12px;
+  font-family: 'Consolas', monospace;
+  color: #75beff;
+  background: rgba(0,127,212,0.1);
+  border: 1px solid rgba(0,127,212,0.25);
+  border-radius: 4px;
+  padding: 3px 10px;
+  word-break: break-all;
+}
+
+.vbrowser-allowed-session {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+/* ── External simulated web page ─────────────────────────────────── */
+.vbrowser-external {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  background: #fff;
+  overflow: hidden;
+  position: relative;
+}
+
+.vbrowser-ext-page {
+  flex: 1;
+  overflow-y: auto;
+  padding: 32px 40px;
+  background: #fff;
+}
+
+.vbrowser-ext-favicon-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 28px;
+}
+
+.vbrowser-ext-favicon-circle {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #007fd4 0%, #00a8a8 100%);
+  color: #fff;
+  font-size: 16px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.vbrowser-ext-domain-label {
+  font-size: 13px;
+  color: #444;
+  font-family: 'Segoe UI', system-ui, sans-serif;
+}
+
+.vbrowser-ext-hero {
+  margin-bottom: 32px;
+  padding-bottom: 24px;
+  border-bottom: 1px solid #eee;
+}
+
+.vbrowser-ext-hero-title {
+  font-size: 28px;
+  font-weight: 700;
+  color: #1a1a1a;
+  margin-bottom: 6px;
+  font-family: 'Segoe UI', system-ui, sans-serif;
+}
+
+.vbrowser-ext-hero-sub {
+  font-size: 13px;
+  color: #777;
+  font-family: 'Segoe UI', system-ui, sans-serif;
+}
+
+.vbrowser-ext-hero-sub strong {
+  color: #007fd4;
+}
+
+.vbrowser-ext-skeleton {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.vbrowser-ext-skel-h {
+  height: 20px;
+  background: #e8e8e8;
+  border-radius: 4px;
+  width: 40%;
+  margin-bottom: 6px;
+}
+
+.vbrowser-ext-skel-line {
+  height: 12px;
+  background: #f0f0f0;
+  border-radius: 3px;
+}
+
+/* Session info bar at bottom of external page */
+.vbrowser-ext-session-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 5px;
+  padding: 6px 10px;
+  background: #1e2a1e;
+  border-top: 1px solid #2a3a2a;
+  flex-shrink: 0;
+}
+
+.vbrowser-chip-warn {
+  background: rgba(230, 160, 40, 0.15);
+  color: #e6a028;
+  border-color: rgba(230, 160, 40, 0.3);
+}
+
+.vbrowser-chip-btn {
+  cursor: pointer;
+  background: rgba(0, 127, 212, 0.1);
+  color: #75beff;
+  border-color: rgba(0, 127, 212, 0.25);
+  transition: background 0.1s;
+  font-family: inherit;
+}
+
+.vbrowser-chip-btn:hover {
+  background: rgba(0, 127, 212, 0.2);
+}
+
+/* ── Loading spinner ─────────────────────────── */
+.vb-loading-spinner {
+  width: 32px;
+  height: 32px;
+  border: 3px solid #2d2d2d;
+  border-top-color: #007fd4;
+  border-radius: 50%;
+  animation: vb-spin 0.7s linear infinite;
+  margin-bottom: 8px;
+}
+
+@keyframes vb-spin {
+  to { transform: rotate(360deg); }
+}

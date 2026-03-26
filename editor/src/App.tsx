@@ -8,7 +8,7 @@ import EditorArea from './components/EditorArea'
 import ProblemsPanel, { MOCK_DIAGNOSTICS } from './components/ProblemsPanel'
 import type { FileNode, EditorTab, Diagnostic, SimConfig } from './types'
 import { DEFAULT_SIM_CONFIG, BROWSER_TAB_PATH } from './types'
-import { readDirectory } from './utils/fs'
+import { readDirectory, readTextFiles } from './utils/fs'
 import './App.css'
 
 function TitleBar({ activeTabPath }: { activeTabPath: string | null }) {
@@ -100,6 +100,7 @@ export default function App() {
   const [problemsOpen, setProblemsOpen] = useState(false)
   const [diagnostics] = useState<Diagnostic[]>(MOCK_DIAGNOSTICS)
   const [simConfig, setSimConfig] = useState<SimConfig>(DEFAULT_SIM_CONFIG)
+  const [templateFiles, setTemplateFiles] = useState<Record<string, string>>({})
 
   const handleOpenFolder = useCallback(async () => {
     try {
@@ -108,6 +109,8 @@ export default function App() {
       setRootHandle(handle)
       setRootName(handle.name)
       setFileTree(tree)
+      // Read all text files so WASM can render templates without disk access
+      readTextFiles(handle).then(setTemplateFiles)
     } catch {
       // user cancelled
     }
@@ -152,6 +155,8 @@ export default function App() {
       await writable.write(content)
       await writable.close()
       setTabs(prev => prev.map(t => t.path === path ? { ...t, isDirty: false } : t))
+      // Sync saved content into templateFiles so WASM hot-reloads the template
+      setTemplateFiles(prev => ({ ...prev, [path]: content }))
     } catch (e) {
       console.error('Save failed:', e)
     }
@@ -225,6 +230,7 @@ export default function App() {
             onSave={handleSave}
             navigateTo={navigateTo}
             simConfig={simConfig}
+            templateFiles={templateFiles}
           />
           {problemsOpen && (
             <ProblemsPanel

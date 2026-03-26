@@ -37,7 +37,19 @@ type Session struct {
 	LimitBytesIn   int64
 	LimitBytesOut  int64
 
+	// Blocked means the client must watch an advertisement before accessing the internet.
+	Blocked bool
+
 	Cookie string
+}
+
+// ProfileConfig holds per-profile limits applied to sessions at login.
+type ProfileConfig struct {
+	SessionTimeout time.Duration
+	IdleTimeout    time.Duration
+	LimitBytesIn   int64
+	LimitBytesOut  int64
+	SharedUsers    int
 }
 
 // Uptime returns elapsed time since login.
@@ -108,27 +120,43 @@ func (ss *SessionStore) Delete(ip string) {
 	}
 }
 
+// userEntry stores credentials and optional profile assignment for a single user.
+type userEntry struct {
+	password  string
+	profileID string
+}
+
 // UserDatabase is a simple in-memory user store for the simulator.
 type UserDatabase struct {
 	mu    sync.RWMutex
-	users map[string]string // username -> password
+	users map[string]userEntry
 }
 
 func NewUserDatabase() *UserDatabase {
-	return &UserDatabase{users: make(map[string]string)}
+	return &UserDatabase{users: make(map[string]userEntry)}
 }
 
 func (db *UserDatabase) Add(username, password string) {
+	db.AddWithProfile(username, password, "")
+}
+
+func (db *UserDatabase) AddWithProfile(username, password, profileID string) {
 	db.mu.Lock()
 	defer db.mu.Unlock()
-	db.users[username] = password
+	db.users[username] = userEntry{password: password, profileID: profileID}
 }
 
 func (db *UserDatabase) Authenticate(username, password string) bool {
 	db.mu.RLock()
 	defer db.mu.RUnlock()
-	p, ok := db.users[username]
-	return ok && p == password
+	e, ok := db.users[username]
+	return ok && e.password == password
+}
+
+func (db *UserDatabase) GetProfileID(username string) string {
+	db.mu.RLock()
+	defer db.mu.RUnlock()
+	return db.users[username].profileID
 }
 
 // generateCookie creates a random hex cookie value.
@@ -143,6 +171,12 @@ func generateSessionID() string {
 	b := make([]byte, 8)
 	_, _ = rand.Read(b)
 	return hex.EncodeToString(b)
+}
+
+// FormatDuration formats a duration in MikroTik style: "10h2m33s".
+// Exported for use by the WASM API layer.
+func FormatDuration(d time.Duration) string {
+	return formatDuration(d)
 }
 
 // formatDuration formats a duration in MikroTik style: "10h2m33s".
@@ -196,6 +230,11 @@ type ServerConfig struct {
 
 	// AllowTrial enables trial user access via T-<mac> username
 	AllowTrial bool
+
+	// AdvertRequired marks new sessions as blocked until they complete an advertisement.
+	AdvertRequired bool
+	// AdvertURL is the advertisement URL injected as $(link-advert).
+	AdvertURL string
 
 	// SSLLogin indicates HTTPS is being used
 	SSLLogin bool
@@ -338,8 +377,12 @@ func Variables(cfg ServerConfig, sess *Session, dst string, errMsg string, chapI
 
 		vars["refresh-timeout"] = ""
 		vars["refresh-timeout-secs"] = "0"
-		vars["blocked"] = "no"
+		vars["blocked"] = boolToYesNo(sess.Blocked)
 		vars["login-by-mac"] = boolToYesNo(sess.LoginBy == "mac")
+		if sess.Blocked && cfg.AdvertURL != "" {
+			vars["link-advert"] = cfg.AdvertURL
+			vars["advert-pending"] = "yes"
+		}
 	} else {
 		vars["username"] = ""
 		vars["ip"] = ""

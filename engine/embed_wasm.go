@@ -2,14 +2,8 @@
 
 package mikrotikhotspot
 
-import "embed"
+import "io/fs"
 
-// DefaultTemplates contains all built-in hotspot templates embedded at
-// compile time so the WASM binary is self-contained.
-//
-// Requires engine/templates to exist (symlink or real directory):
-//
-//	ln -sf ../templates engine/templates
-//
-//go:embed templates
-var DefaultTemplates embed.FS
+// DefaultTemplates is nil for WASM builds.
+// Templates are injected at runtime from the browser via hotspot.init({ templates: {...} }).
+var DefaultTemplates fs.FS

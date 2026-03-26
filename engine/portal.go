@@ -11,18 +11,20 @@ import (
 // Portal is the HTTP-agnostic captive portal engine.
 // It can be used by the HTTP Simulator, the WASM module, or any other transport.
 type Portal struct {
-	cfg    ServerConfig
-	store  *SessionStore
-	userDB *UserDatabase
-	fsys   fs.FS // nil = read from cfg.TemplateDir on disk
+	cfg      ServerConfig
+	store    *SessionStore
+	userDB   *UserDatabase
+	fsys     fs.FS // nil = read from cfg.TemplateDir on disk
+	profiles map[string]*ProfileConfig
 }
 
 // NewPortal creates a Portal that reads templates from disk (cfg.TemplateDir).
 func NewPortal(cfg ServerConfig) *Portal {
 	return &Portal{
-		cfg:    cfg,
-		store:  NewSessionStore(),
-		userDB: NewUserDatabase(),
+		cfg:      cfg,
+		store:    NewSessionStore(),
+		userDB:   NewUserDatabase(),
+		profiles: make(map[string]*ProfileConfig),
 	}
 }
 
@@ -37,6 +39,37 @@ func NewPortalWithFS(cfg ServerConfig, fsys fs.FS) *Portal {
 // AddUser registers a username/password pair.
 func (p *Portal) AddUser(username, password string) {
 	p.userDB.Add(username, password)
+}
+
+// AddUserWithProfile registers a username/password/profileID triple.
+func (p *Portal) AddUserWithProfile(username, password, profileID string) {
+	p.userDB.AddWithProfile(username, password, profileID)
+}
+
+// AddProfile registers a ProfileConfig by ID.
+func (p *Portal) AddProfile(id string, pc *ProfileConfig) {
+	p.profiles[id] = pc
+}
+
+// RecordTraffic accumulates bytes transferred by the client, and expires the
+// session immediately if a per-session quota is exceeded.
+func (p *Portal) RecordTraffic(ip string, bytesIn, bytesOut int64) {
+	sess, ok := p.store.Get(ip)
+	if !ok || !sess.LoggedIn {
+		return
+	}
+	sess.BytesIn += bytesIn
+	sess.BytesOut += bytesOut
+	if p.isSessionExpired(sess) {
+		p.store.Delete(ip)
+	}
+}
+
+// SetAdvertDone unblocks the session after the client has watched an advertisement.
+func (p *Portal) SetAdvertDone(ip string) {
+	if sess, ok := p.store.Get(ip); ok {
+		sess.Blocked = false
+	}
 }
 
 // Store returns the session store (e.g. for the HTTP layer to inspect sessions).
@@ -81,12 +114,17 @@ type PortalResponse struct {
 
 // CheckAccess determines whether a navigation to targetURL should be
 // intercepted. Returns Action=="allow" if already authenticated.
+//
+// For unauthenticated clients the login page is returned directly,
+// skipping the rlogin.html/redirect.html interstitial chain that exists
+// for real browsers with DNS-level capture. Virtual browsers handle this
+// via the portal engine instead.
 func (p *Portal) CheckAccess(clientIP, cookie, targetURL string) PortalResponse {
 	if p.isLoggedIn(clientIP, cookie) {
 		return PortalResponse{Action: "allow", TargetURL: targetURL}
 	}
 	return p.Handle(PortalRequest{
-		Path:     "/",
+		Path:     "/login",
 		Method:   "GET",
 		ClientIP: clientIP,
 		Cookie:   cookie,
@@ -241,14 +279,33 @@ func (p *Portal) isLoggedIn(ip, cookie string) bool {
 
 func (p *Portal) resolveSession(ip, cookie string) *Session {
 	if sess, ok := p.store.Get(ip); ok && sess.LoggedIn {
+		if p.isSessionExpired(sess) {
+			p.store.Delete(ip)
+			return nil
+		}
 		return sess
 	}
 	if cookie != "" {
 		if sess, ok := p.store.GetByCookie(cookie); ok && sess.LoggedIn {
+			if p.isSessionExpired(sess) {
+				p.store.Delete(sess.IP)
+				return nil
+			}
 			return sess
 		}
 	}
 	return nil
+}
+
+func (p *Portal) isSessionExpired(sess *Session) bool {
+	if sess.SessionTimeout > 0 && sess.Uptime() >= sess.SessionTimeout {
+		return true
+	}
+	if (sess.LimitBytesIn > 0 && sess.BytesIn >= sess.LimitBytesIn) ||
+		(sess.LimitBytesOut > 0 && sess.BytesOut >= sess.LimitBytesOut) {
+		return true
+	}
+	return false
 }
 
 func (p *Portal) createSession(ip, mac, username, loginBy string) *Session {
@@ -261,6 +318,16 @@ func (p *Portal) createSession(ip, mac, username, loginBy string) *Session {
 		LoginBy:   loginBy,
 		LoginTime: time.Now(),
 		Cookie:    generateCookie(),
+		Blocked:   p.cfg.AdvertRequired,
+	}
+	// Apply profile-level limits if a profile is assigned to this user.
+	if profileID := p.userDB.GetProfileID(username); profileID != "" {
+		if pc, ok := p.profiles[profileID]; ok {
+			sess.SessionTimeout = pc.SessionTimeout
+			sess.IdleTimeout = pc.IdleTimeout
+			sess.LimitBytesIn = pc.LimitBytesIn
+			sess.LimitBytesOut = pc.LimitBytesOut
+		}
 	}
 	p.store.Set(sess)
 	return sess
