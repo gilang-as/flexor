@@ -13,7 +13,7 @@ import (
 func main() {
 	var (
 		bind        = flag.String("bind", ":8080", "Address to listen on (e.g. :8080)")
-		templateDir = flag.String("templates", "templates/mikrotik-default", "Path to hotspot template directory")
+		templateDir = flag.String("templates", "../templates/mikrotik-default-v7", "Path to hotspot template directory")
 		hostname    = flag.String("hostname", "127.0.0.1:8080", "Hostname shown in hotspot links")
 		identity    = flag.String("identity", "MikroTik", "RouterOS identity name")
 		serverName  = flag.String("server-name", "hotspot1", "HotSpot server name")
