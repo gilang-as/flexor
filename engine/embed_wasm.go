@@ -1,6 +1,6 @@
 //go:build js && wasm
 
-package mikrotikhotspot
+package flexor
 
 import "io/fs"
 

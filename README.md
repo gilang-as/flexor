@@ -1,393 +1,277 @@
-# Captive Portal Emulator
-
-Emulator captive portal berbagai provider (MikroTik RouterOS, dan lainnya ke depannya) yang berjalan di browser maupun sebagai server lokal. Berguna untuk develop, menguji, dan mengedit tampilan halaman captive portal tanpa router fisik.
-
-## Struktur Proyek
-
-```
-.
-├── engine/       # Go — template engine + HTTP simulator + WASM module
-├── editor/       # React + Vite — web UI virtual browser
-└── templates/    # Contoh template captive portal untuk testing
-```
-
-## Fitur
-
-- **Virtual browser** (React) — simulasi navigasi, intercept, dan tampilkan halaman portal
-- **Template engine** — substitusi `$(var)` dan kondisional `$(if/elif/else/endif)` sesuai spec MikroTik
-- **WASM module** — engine Go dikompilasi ke WebAssembly, berjalan langsung di browser tanpa server
-- **CLI server** — jalankan simulator sebagai HTTP server lokal untuk testing browser nyata
-- **Multi-template** — sub-direktori language (`?target=lv`), embed templates ke binary
-- Semua halaman servlet standar: `login`, `alogin`, `logout`, `status`, `redirect`, `rlogin`, `radvert`, `error`
+<div align="center">
+  <img src="editor/public/icon.png" width="72" alt="Flexor logo" />
+  <h1>Flexor</h1>
+  <p>Captive portal emulator & web editor — develop and preview hotspot login pages without a physical router.</p>
+  <p>
+    <a href="https://github.com/gilang-as/flexor"><img src="https://img.shields.io/badge/github-gilang--as%2Fflexor-blue?logo=github" alt="GitHub" /></a>
+    <img src="https://img.shields.io/badge/go-1.21%2B-00ADD8?logo=go" alt="Go" />
+    <img src="https://img.shields.io/badge/react-19-61DAFB?logo=react" alt="React" />
+    <img src="https://img.shields.io/badge/provider-MikroTik-orange" alt="MikroTik" />
+    <img src="https://img.shields.io/badge/status-active-brightgreen" alt="Status" />
+  </p>
+</div>
 
 ---
 
-## Prasyarat
+## Screenshots
+
+| Welcome | Editor |
+|---------|--------|
+| ![Welcome screen](sc1.png) | ![Editor with files](sc2.png) |
+
+| Virtual Browser | Simulator Config |
+|-----------------|------------------|
+| ![Virtual browser](sc3.png) | ![Simulator](sc5.png) |
+
+---
+
+## What is Flexor?
+
+Flexor is a browser-based tool (and local CLI) for editing, simulating, and previewing **captive portal** templates — the login pages shown by Wi-Fi hotspot routers.
+
+Instead of uploading files to a real router every time you change a line of HTML, Flexor runs the entire portal engine as a **WebAssembly module** in your browser. Edit, save, and instantly see how the login page looks — no router needed.
+
+**Currently supported providers**
+- ✅ MikroTik RouterOS (v6 & v7 templates)
+
+**Planned providers** *(contributions welcome!)*
+- ⬜ pfSense / OPNsense captive portal
+- ⬜ OpenWrt (nodogsplash, coova-chilli)
+- ⬜ Cisco / Meraki
+- ⬜ Any provider with a well-documented template spec
+
+---
+
+## Features
+
+| Feature | Description |
+|---------|-------------|
+| **Web Editor** | VS Code-like editor (Monaco) with syntax highlighting, file tree, tabs |
+| **Virtual Browser** | Simulated browser that intercepts requests and renders the portal HTML |
+| **WASM Engine** | Go portal engine compiled to WebAssembly — runs 100% client-side |
+| **CLI Server** | Local HTTP server for testing with a real browser |
+| **GitHub Integration** | Open repos, commit & push, branch switching — with or without a token |
+| **Search & Replace** | Full-text search with regex, case-sensitive, whole-word, file include/exclude |
+| **Download as ZIP** | Export the entire template folder as a ZIP archive |
+| **Multi-template** | Bring any MikroTik hotspot template folder; community examples available |
+
+---
+
+## Project Structure
+
+```
+flexor/
+├── engine/                   # Go module (gopkg.gilang.dev/flexor)
+│   ├── mikrotik.go           # Session, SessionStore, ServerConfig, Variables()
+│   ├── template.go           # Template engine: $(var), $(if/elif/else/endif)
+│   ├── portal.go             # HTTP-agnostic portal engine
+│   ├── simulator.go          # net/http wrapper
+│   ├── embed.go              # embed.FS — bundle templates into binary/WASM
+│   └── cmd/
+│       ├── cli/main.go       # CLI server
+│       └── wasm/main.go      # WebAssembly entry point → JS API
+│
+├── editor/                   # React 19 + Vite + Monaco web editor
+│   ├── src/
+│   │   ├── App.tsx           # Root component + all state
+│   │   ├── components/
+│   │   │   ├── EditorArea.tsx       # Monaco editor + tabs
+│   │   │   ├── ExplorerPanel.tsx    # File tree (local + GitHub)
+│   │   │   ├── SearchPanel.tsx      # VS Code-like search & replace
+│   │   │   ├── ActivityBar.tsx      # Left icon strip
+│   │   │   ├── GitHubPanel.tsx      # GitHub connect / repo browser
+│   │   │   ├── SimulatorPanel.tsx   # Hotspot config panel
+│   │   │   └── VirtualBrowser.tsx   # Virtual browser tab
+│   │   └── utils/
+│   │       ├── fs.ts                # File System Access API helpers
+│   │       └── github.ts            # GitHub REST API client
+│   └── public/
+│       └── portal.wasm              # Built WASM (not committed)
+
+```
+
+---
+
+## Quick Start
+
+### Prerequisites
 
 - Go 1.21+
 - Node.js 18+
+- Chrome or Edge (File System Access API)
 
 ---
 
-## engine/ — Go Template Engine & Simulator
+### Option A — Web Editor (browser)
 
-Berisi semua logika inti: session management, template engine MikroTik, HTTP simulator, dan WASM entry point.
-
-### Menjalankan CLI Server
-
-```bash
-cd engine
-go run ./cmd/cli/main.go
-```
-
-Buka browser ke `http://127.0.0.1:8080` — langsung masuk ke simulasi captive portal.
-
-### Opsi CLI
-
-```
-Flags:
-  -bind string        Address to listen on          (default ":8080")
-  -hostname string    Hostname shown in portal links (default "127.0.0.1:8080")
-  -identity string    RouterOS identity name        (default "MikroTik")
-  -server-name string HotSpot server name           (default "hotspot1")
-  -templates string   Path to template directory    (default "templates/mikrotik-default")
-  -trial              Allow trial access (T-<mac>)
-  -users string       user:password pairs           (default "admin:admin,user:password")
-```
-
-```bash
-# Contoh
-go run ./cmd/cli/main.go -users "gilang:secret,tamu:tamu" -templates ../templates/mikrotik-default
-```
-
-### Build WASM
+**1. Build the WASM module**
 
 ```bash
 cd engine
 GOOS=js GOARCH=wasm go build -o ../editor/public/portal.wasm ./cmd/wasm/
 ```
 
-### Menggunakan sebagai Library
+**2. Run the editor dev server**
+
+```bash
+cd editor
+npm install
+npm run dev
+# → http://localhost:5173
+```
+
+Then open the editor, click **Open Folder** or **Import from GitHub**, and start editing. The Virtual Browser tab lets you simulate the login flow in real time.
+
+---
+
+### Option B — CLI Server (local HTTP)
+
+```bash
+cd engine
+go run ./cmd/cli/main.go
+# → http://127.0.0.1:8080
+```
+
+Open your real browser to that address and you'll see the captive portal login page.
+
+**Available flags:**
+
+```
+-bind string          Listen address               (default ":8080")
+-hostname string      Hostname in portal links     (default "127.0.0.1:8080")
+-identity string      RouterOS identity name       (default "MikroTik")
+-server-name string   HotSpot server name          (default "hotspot1")
+-templates string     Path to hotspot template directory (required)
+-trial                Allow trial access (T-<mac>)
+-users string         user:password pairs          (default "admin:admin,user:password")
+```
+
+```bash
+# Example
+go run ./cmd/cli/main.go \
+  -users "gilang:secret,tamu:tamu" \
+  -templates /path/to/your/template
+```
+
+---
+
+### Option C — Use as a Go Library
+
+```bash
+go get gopkg.gilang.dev/flexor
+```
 
 ```go
-import hs "gopkg.gilang.dev/mikrotik/hotspot"
+import flexor "gopkg.gilang.dev/flexor"
 
-cfg := hs.DefaultConfig()
-portal := hs.NewPortalWithFS(cfg, hs.DefaultTemplates)
+cfg := flexor.DefaultConfig()
+portal := flexor.NewPortalWithFS(cfg, flexor.DefaultTemplates)
 portal.AddUser("admin", "secret")
 
-// Cek akses saat user navigasi ke URL tertentu
 resp := portal.CheckAccess(clientIP, cookie, "https://google.com")
 if resp.Action == "portal" {
-    // Tampilkan resp.HTML ke user
+    // Render resp.HTML to the client
 }
 ```
 
 ---
 
-## editor/ — Virtual Browser (React)
+## Template Syntax (MikroTik)
 
-Web UI yang mensimulasikan browser dengan captive portal. Engine Go berjalan sebagai WASM di dalam browser — tidak butuh backend server.
-
-```bash
-cd editor
-npm install
-
-# Pastikan portal.wasm sudah ada di editor/public/
-# (lihat langkah Build WASM di atas)
-
-npm run dev      # http://localhost:5173
-npm run build    # production build ke editor/dist/
-```
-
-**Cara kerja:**
-1. User "mengetik" URL di address bar virtual
-2. React memanggil `hotspot.checkAccess(ip, cookie, url)` ke WASM
-3. Jika belum login → tampilkan HTML halaman login di dalam iframe/panel
-4. User submit form login → `hotspot.handle(...)` diproses WASM
-5. Login berhasil → navigasi berlanjut ke URL tujuan
-
----
-
-## templates/ — Contoh Template untuk Testing
-
-Berisi template siap pakai yang bisa langsung digunakan oleh CLI server maupun engine.
-
-```
-templates/
-└── mikrotik-default/    # Template default MikroTik RouterOS
-    ├── login.html       # Halaman login utama
-    ├── alogin.html      # Setelah login berhasil (popup status + redirect)
-    ├── logout.html      # Setelah logout (statistik sesi)
-    ├── status.html      # Status sesi aktif (bytes, uptime, dll)
-    ├── redirect.html    # Redirect ke URL lain
-    ├── rlogin.html      # Redirect ke login (untuk user belum login)
-    ├── radvert.html     # Halaman iklan
-    ├── error.html       # Halaman error fatal
-    ├── errors.txt       # Pesan error yang bisa ditranslasi
-    ├── md5.js           # MD5 untuk HTTP-CHAP authentication
-    ├── img/             # Gambar logo MikroTik
-    ├── lv/              # Terjemahan Latvian
-    └── xml/             # Response WISP XML
-```
-
-Untuk membuat template kustom: salin `mikrotik-default/`, edit HTML-nya, lalu gunakan dengan flag `-templates ./template-kustom`.
-
----
-
-## Sintaks Template MikroTik
-
-Variabel:
 ```html
-Halo, $(username)!  IP kamu: $(ip)  MAC: $(mac)
+<!-- Variable substitution -->
+Hello, $(username)!  Your IP: $(ip)
 <a href="$(link-logout)">Logout</a>
-```
 
-Kondisional:
-```html
-$(if username == admin)
-  Selamat datang, Admin!
-$(elif logged-in == yes)
-  Selamat datang, $(username)!
+<!-- Conditionals -->
+$(if logged-in == yes)
+  <p>Welcome back, $(username). Uptime: $(uptime)</p>
+$(elif trial == yes)
+  <p>Trial access active.</p>
 $(else)
-  Silakan login.
+  <p>Please log in.</p>
 $(endif)
 ```
 
-Variabel yang tersedia: `hostname`, `username`, `ip`, `mac`, `uptime`, `bytes-in-nice`, `bytes-out-nice`, `session-time-left`, `link-login`, `link-logout`, `link-status`, `error`, dan [lainnya](MIKROTIK.md).
+All available variables are documented in [MIKROTIK.md](MIKROTIK.md).
 
 ---
 
-## WASM JS API
+## Template Examples
 
-Setelah `portal.wasm` dimuat:
+The `templates/` directory is not bundled in this repo — grab a ready-made template from one of these community repos:
 
-```js
-// Inisialisasi
-hotspot.init({
-  hostname: 'localhost:8080',
-  identity: 'MikroTik',
-  allowTrial: false,
-  users: [{ username: 'admin', password: 'admin' }]
-})
+| Template | Description |
+|----------|-------------|
+| [router-os-default-hotspot-new](https://github.com/gilang-as/router-os-default-hotspot-new) | MikroTik RouterOS default hotspot (new version) |
+| [router-os-default-hotspot](https://github.com/gilang-as/router-os-default-hotspot) | MikroTik RouterOS default hotspot (classic) |
+| [mikrotik-hotspot-template-pink](https://github.com/gilang-as/mikrotik-hotspot-template-pink) | Custom pink-themed MikroTik hotspot template |
 
-// Intercept navigasi
-const resp = hotspot.checkAccess(clientIP, cookie, 'https://google.com')
-// resp: { action: 'portal'|'allow', html: string, setCookie: string, targetURL: string }
-
-// Proses request halaman portal
-hotspot.handle(ip, cookie, '/login', 'POST', JSON.stringify({username:'admin',password:'admin',dst:''}), '{}', '')
-
-// Cek status sesi
-hotspot.getStatus(ip, cookie)
-// → { username, ip, mac, uptime, uptimeSec, bytesIn, bytesOut }
-
-hotspot.isLoggedIn(ip, cookie) // → boolean
+**Usage with CLI:**
+```bash
+# Clone a template then point the CLI at it
+git clone https://github.com/gilang-as/router-os-default-hotspot-new my-template
+cd engine
+go run ./cmd/cli/main.go -templates ../my-template
 ```
+
+**Usage with Web Editor:**
+Click **Open Folder** and select the cloned template directory.
 
 ---
 
-## Alur Captive Portal
+## Roadmap
 
-```
-Browser buka google.com
-        ↓
-checkAccess() → action: "portal"
-        ↓
-Tampilkan login.html
-        ↓
-User isi username + password → POST /login
-        ↓
-  ┌─ Salah → login.html + $(error)
-  └─ Benar → alogin.html + setCookie → redirect ke google.com
-                    ↓
-           Navigasi kembali diizinkan (action: "allow")
-                    ↓
-              status.html (uptime, bytes, logout button)
-```
+### Near-term
+- [ ] LSP server for MikroTik template variables (autocomplete & hover docs in the web editor)
+- [ ] VS Code extension with the same LSP
+- [ ] Improve simulator: session timers, bandwidth tracking, advertisement flow
+
+### Provider support
+- [ ] pfSense / OPNsense captive portal
+- [ ] OpenWrt (nodogsplash)
+- [ ] Generic HTML-only portal (no special syntax)
+
+### Infrastructure
+- [ ] Published WASM build (no local build required)
+- [ ] One-click deploy to Vercel / Cloudflare Pages
 
 ---
 
-## Menambah Provider Baru
+## Contributing
 
-1. Buat direktori `templates/<provider>/` dengan halaman HTML provider tersebut
-2. Sesuaikan variable mapping di `engine/mikrotik.go` jika syntax variabel berbeda
-3. Tambahkan `Provider` constant baru
-4. Buat entry di `templates/` untuk pengujian
+Contributions are very welcome! Here are the best areas to help:
 
-## Lisensi
+### Add a new provider
+1. Create a template folder (can be a standalone repo) with the provider's HTML pages
+2. Add a new `ProviderXxx` constant and implement the variable map in `engine/`
+3. Wire it up in the CLI and WASM API
 
-MIT
+### Improve the editor
+- Bug fixes, UI polish, performance
+- Keyboard shortcuts, drag-and-drop, multi-cursor save
 
-## Prasyarat
+### Write tests
+- Unit tests for the Go template engine (`engine/template_test.go`)
+- Integration tests for the portal flow
 
-- Go 1.21+
+### How to submit
+1. Fork the repo
+2. Create a branch: `git checkout -b feat/my-feature`
+3. Commit your changes and open a Pull Request
+4. Please include a short description of what changed and why
 
-## Instalasi
+> For large changes, open an issue first to discuss the approach.
 
-```bash
-git clone https://github.com/your-username/mikrotik-hotspot
-cd mikrotik-hotspot
-go build ./...
-```
+---
 
-## Menjalankan Simulator
+## License
 
-### Via `go run`
+GPL-2.0 — see [LICENSE](LICENSE).
 
-```bash
-go run ./cmd/cli/main.go
-```
+---
 
-Buka browser ke `http://127.0.0.1:8080`
+<div align="center">
+  Made with ♥ by <a href="https://github.com/gilang-as">Gilang Adi S</a>
+</div>
 
-### Via binary
-
-```bash
-go build -o hotspot-sim ./cmd/cli/main.go
-./hotspot-sim
-```
-
-## Opsi CLI
-
-```
-Usage: hotspot-sim [flags]
-
-Flags:
-  -bind string
-        Address to listen on (default ":8080")
-  -hostname string
-        Hostname shown in hotspot links (default "127.0.0.1:8080")
-  -identity string
-        RouterOS identity name (default "MikroTik")
-  -server-name string
-        HotSpot server name (default "hotspot1")
-  -templates string
-        Path to hotspot template directory (default "templates/mikrotik-default")
-  -trial
-        Allow trial access (T-<mac> username)
-  -users string
-        Comma-separated user:password pairs (default "admin:admin,user:password")
-```
-
-### Contoh
-
-```bash
-# Akun custom, port berbeda
-./hotspot-sim -bind :9090 -hostname "192.168.1.1:9090" -users "gilang:secret,tamu:tamu"
-
-# Gunakan template custom
-./hotspot-sim -templates ./my-hotspot-theme
-
-# Aktifkan trial access
-./hotspot-sim -trial -users "admin:admin"
-```
-
-## Struktur Direktori
-
-```
-mikrotik-hotspot/
-├── mikrotik.go           # Types inti: Session, SessionStore, ServerConfig, Variables()
-├── template.go           # Template engine: $(var), $(if), $(elif), $(else), $(endif)
-├── simulator.go          # HTTP server dengan semua route hotspot
-├── cmd/
-│   └── cli/
-│       └── main.go       # CLI entrypoint
-└── templates/
-    └── mikrotik-default/ # Template HotSpot default MikroTik
-        ├── login.html
-        ├── alogin.html
-        ├── logout.html
-        ├── status.html
-        ├── redirect.html
-        ├── rlogin.html
-        ├── radvert.html
-        ├── error.html
-        ├── errors.txt
-        ├── md5.js
-        ├── img/
-        ├── lv/           # Template bahasa Latvia
-        └── xml/          # Template WISP XML
-```
-
-## Menggunakan sebagai Library
-
-```go
-import mikrotikhotspot "gopkg.gilang.dev/mikrotik/hotspot"
-
-cfg := mikrotikhotspot.DefaultConfig()
-cfg.BindAddress = ":8080"
-cfg.TemplateDir = "templates/mikrotik-default"
-cfg.Hostname = "127.0.0.1:8080"
-
-sim := mikrotikhotspot.NewSimulator(cfg)
-sim.AddUser("admin", "secret")
-sim.AddUser("guest", "guest")
-
-log.Fatal(sim.ListenAndServe())
-```
-
-Karena `Simulator` mengimplementasikan `http.Handler`, bisa di-mount ke mux yang sudah ada:
-
-```go
-http.Handle("/hotspot/", http.StripPrefix("/hotspot", sim))
-```
-
-## Alur HotSpot
-
-```
-Browser buka URL apapun
-        ↓
-GET /  → rlogin.html / redirect.html → ke /login
-        ↓
-GET /login → login.html
-        ↓
-POST /login (username + password)
-  ├─ Salah → login.html + pesan error $(error)
-  └─ Benar → alogin.html + Set-Cookie → redirect ke URL asal
-        ↓
-GET /status → status.html (bytes in/out, uptime, sisa waktu)
-        ↓
-POST /logout → logout.html (statistik akhir sesi)
-```
-
-## Variabel Template yang Didukung
-
-Semua variabel standar MikroTik tersedia. Di antaranya:
-
-| Variabel | Contoh nilai |
-|---|---|
-| `$(hostname)` | `127.0.0.1:8080` |
-| `$(username)` | `admin` |
-| `$(ip)` | `127.0.0.1` |
-| `$(mac)` | `AA:BB:CC:DD:EE:FF` |
-| `$(uptime)` | `1h23m45s` |
-| `$(bytes-in-nice)` | `1.2MiB` |
-| `$(session-time-left)` | `30m0s` |
-| `$(link-login)` | `http://127.0.0.1:8080/login` |
-| `$(link-logout)` | `http://127.0.0.1:8080/logout` |
-| `$(link-status)` | `http://127.0.0.1:8080/status` |
-| `$(error)` | `invalid username or password` |
-
-Sintaks kondisional yang didukung:
-
-```html
-$(if username == admin)
-  Selamat datang, admin!
-$(elif logged-in == yes)
-  Selamat datang, $(username)!
-$(else)
-  Silakan login.
-$(endif)
-```
-
-## Membuat Template Kustom
-
-1. Salin direktori `templates/mikrotik-default` ke direktori baru
-2. Edit file HTML sesuai kebutuhan
-3. Gunakan variabel `$(...)` dan kondisional sesuai [dokumentasi MikroTik](MIKROTIK.md)
-4. Jalankan simulator dengan `-templates ./direktori-baru`
-
-## Lisensi
-
-MIT

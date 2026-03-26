@@ -146,6 +146,8 @@ const INTERCEPTOR_SCRIPT = `<script>
  * Prepare HTML from WASM for safe rendering in a sandboxed srcdoc iframe:
  *  - Inline <script src="..."> from templateFiles (avoids DNS fetch)
  *  - Inline <link rel="stylesheet" href="..."> from templateFiles
+ *  - Rewrite <img src="..."> to data URLs from templateFiles
+ *  - Rewrite CSS url(...) inside <style> blocks to data URLs
  *  - Strip <meta http-equiv="refresh"> (avoids iframe navigation)
  *  - Inject interceptor script (captures navigation, form, link)
  */
@@ -171,6 +173,21 @@ function prepareHtml(
     return templateFiles[url] ?? null
   }
 
+  // Build data URL for an image referenced by src/href.
+  // Returns the original value if not found in templateFiles.
+  function imageDataURL(src: string): string {
+    const content = templateContent(src)
+    if (content == null) return src
+    // Already a data URL (image files are stored as data URLs by readTextFiles)
+    if (content.startsWith('data:')) return content
+    // SVG stored as text — encode as data URL
+    const trimmed = content.trimStart()
+    if (trimmed.startsWith('<svg') || trimmed.startsWith('<?xml')) {
+      return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(content)}`
+    }
+    return src
+  }
+
   // Inline <script src="...">
   html = html.replace(/<script\b([^>]*?)src=["']([^"']+)["']([^>]*?)><\/script>/gi,
     (_match, pre, src, post) => {
@@ -186,7 +203,26 @@ function prepareHtml(
       if (!isStylesheet) return _match
       const content = templateContent(href)
       if (content == null) return _match
-      return `<style>${content}</style>`
+      // Rewrite url() inside inlined CSS so image paths resolve too
+      const rewritten = content.replace(/url\(\s*["']?([^"')]+)["']?\s*\)/gi, (_m, u) => {
+        if (u.startsWith('data:')) return _m
+        return `url(${imageDataURL(u)})`
+      })
+      return `<style>${rewritten}</style>`
+    })
+
+  // Rewrite <img src="..."> to data URLs
+  html = html.replace(/<img\b([^>]*?)src=["']([^"']+)["']([^>]*?)>/gi,
+    (_match, pre, src, post) => {
+      return `<img${pre}src="${imageDataURL(src)}"${post}>`
+    })
+
+  // Rewrite <input type="image" src="..."> to data URLs
+  html = html.replace(/<input\b([^>]*?)src=["']([^"']+)["']([^>]*?)>/gi,
+    (_match, pre, src, post) => {
+      const isImage = /type=["']image["']/i.test(pre + post)
+      if (!isImage) return _match
+      return `<input${pre}src="${imageDataURL(src)}"${post}>`
     })
 
   // Convert <meta http-equiv="refresh" content="N; url=X"> to a postMessage script.

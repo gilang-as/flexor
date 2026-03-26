@@ -1,6 +1,7 @@
 import { useCallback } from 'react'
-import type { FileNode, EditorTab } from '../types'
+import type { FileNode, EditorTab, GitHubConfig } from '../types'
 import { readDirectory, readFileContent, readFileAsDataURL, getLanguage, isImageFile, isTextFile } from '../utils/fs'
+import { getFileContent, getFileAsDataURL } from '../utils/github'
 import FileTypeIcon from './FileTypeIcon'
 
 interface Props {
@@ -8,8 +9,10 @@ interface Props {
   fileTree: FileNode[]
   activeFilePath: string | null
   onOpenFolder: () => void
+  onOpenFromGitHub: () => void
   onUpdateTree: (tree: FileNode[]) => void
   onOpenFile: (tab: EditorTab) => void
+  githubConfig?: GitHubConfig | null
 }
 
 interface TreeNodeProps {
@@ -100,24 +103,59 @@ function TreeNode({ node, depth, activeFilePath, onToggle, onOpenFile }: TreeNod
 }
 
 export default function ExplorerPanel({
-  rootHandle, fileTree, activeFilePath, onOpenFolder, onUpdateTree, onOpenFile,
+  rootHandle, fileTree, activeFilePath, onOpenFolder, onOpenFromGitHub, onUpdateTree, onOpenFile, githubConfig,
 }: Props) {
+  const isGitHub = !rootHandle && githubConfig != null
+
   const handleToggle = useCallback(async (path: string) => {
     const node = findNode(fileTree, path)
     if (!node || node.kind !== 'directory') return
     if (!node.expanded) {
       let children = node.children
-      if (!children || children.length === 0) {
+      // GitHub mode: children already loaded (full tree at once); local mode: lazy-load
+      if (!isGitHub && (!children || children.length === 0)) {
         children = await readDirectory(node.handle as FileSystemDirectoryHandle, node.path)
       }
       onUpdateTree(updateNodeInTree(fileTree, path, n => ({ ...n, expanded: true, children })))
     } else {
       onUpdateTree(updateNodeInTree(fileTree, path, n => ({ ...n, expanded: false })))
     }
-  }, [fileTree, onUpdateTree])
+  }, [fileTree, onUpdateTree, isGitHub])
 
   const handleOpenFile = useCallback(async (node: FileNode) => {
     if (node.kind !== 'file') return
+
+    // ── GitHub mode ──────────────────────────────────────────────────────────
+    if (isGitHub && githubConfig) {
+      let content = ''
+      let fileType: EditorTab['fileType'] = 'text'
+      if (isImageFile(node.name)) {
+        fileType = 'image'
+        content = await getFileAsDataURL(
+          githubConfig.token, githubConfig.owner, githubConfig.repo,
+          node.path, githubConfig.branch,
+        )
+      } else if (isTextFile(node.name)) {
+        fileType = 'text'
+        content = await getFileContent(
+          githubConfig.token, githubConfig.owner, githubConfig.repo,
+          node.path, githubConfig.branch,
+        )
+      } else {
+        fileType = 'binary'
+      }
+      onOpenFile({
+        path: node.path,
+        name: node.name,
+        content,
+        language: getLanguage(node.name),
+        isDirty: false,
+        fileType,
+      })
+      return
+    }
+
+    // ── Local mode ───────────────────────────────────────────────────────────
     const handle = node.handle as FileSystemFileHandle
     let content = ''
     let fileType: EditorTab['fileType'] = 'text'
@@ -139,13 +177,19 @@ export default function ExplorerPanel({
       handle,
       fileType,
     })
-  }, [onOpenFile])
+  }, [onOpenFile, isGitHub, githubConfig])
 
-  if (!rootHandle) {
+  if (!rootHandle && !isGitHub) {
     return (
       <div className="explorer-empty">
         <p>No folder opened.</p>
         <button className="open-folder-btn" onClick={onOpenFolder}>Open Folder</button>
+        <button className="open-github-btn" onClick={onOpenFromGitHub}>
+          <svg viewBox="0 0 16 16" width="13" height="13" fill="currentColor">
+            <path d="M8 .198C3.582.198 0 3.78 0 8.198c0 3.536 2.292 6.533 5.47 7.59.4.074.548-.173.548-.386 0-.19-.007-.693-.01-1.36-2.226.483-2.695-1.073-2.695-1.073-.364-.924-.888-1.17-.888-1.17-.726-.497.055-.486.055-.486.803.056 1.226.824 1.226.824.713 1.222 1.871.869 2.328.664.072-.517.279-.869.507-1.069-1.775-.202-3.643-.887-3.643-3.95 0-.873.312-1.587.823-2.147-.082-.202-.357-1.015.078-2.117 0 0 .672-.215 2.2.82A7.67 7.67 0 018 4.068c.68.003 1.364.092 2.003.269 1.527-1.035 2.198-.82 2.198-.82.436 1.102.161 1.915.079 2.117.513.56.822 1.274.822 2.147 0 3.07-1.87 3.746-3.653 3.944.288.248.543.735.543 1.481 0 1.07-.01 1.932-.01 2.194 0 .214.145.463.55.385C13.71 14.728 16 11.732 16 8.198 16 3.78 12.418.198 8 .198z" />
+          </svg>
+          Import from GitHub
+        </button>
       </div>
     )
   }

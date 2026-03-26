@@ -1,7 +1,7 @@
 // Package mikrotikhotspot provides a simulation of a MikroTik RouterOS HotSpot
 // captive portal. It handles session management, MikroTik-style template
 // variable substitution ($(var)), and all standard hotspot servlet pages.
-package mikrotikhotspot
+package flexor
 
 import (
 	"crypto/rand"

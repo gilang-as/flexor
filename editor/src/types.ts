@@ -4,9 +4,17 @@ export type FileNode = {
   name: string
   path: string
   kind: 'file' | 'directory'
-  handle: FileSystemHandle
+  handle?: FileSystemHandle   // present for local files, absent for GitHub-mode nodes
   children?: FileNode[]
   expanded: boolean
+  sha?: string                // GitHub blob/tree SHA
+}
+
+export type GitHubConfig = {
+  token: string
+  owner: string
+  repo: string
+  branch: string
 }
 
 export type EditorTab = {

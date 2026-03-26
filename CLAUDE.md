@@ -2,45 +2,59 @@
 
 ## Project Overview
 
-Captive portal emulator that simulates hotspot login flow dari berbagai provider (saat ini: MikroTik RouterOS). Tujuannya untuk development & testing tampilan halaman captive portal tanpa perlu perangkat keras router.
+**Flexor** — captive portal emulator & web editor. Mensimulasikan hotspot login flow dari berbagai provider (saat ini: MikroTik RouterOS). Tujuannya untuk development & testing tampilan halaman captive portal tanpa perlu perangkat keras router.
+
+- **Repository:** https://github.com/gilang-as/flexor
+- **Author:** Gilang Adi S
+- **Go module:** `gopkg.gilang.dev/flexor`
 
 ## Repository Structure
 
 ```
 .
-├── engine/                   # Go module — template engine + proxy simulator
+├── engine/                   # Go module
 │   ├── mikrotik.go           # Core types: Session, SessionStore, ServerConfig, Variables()
 │   ├── template.go           # MikroTik template engine: $(var), $(if/elif/else/endif)
 │   ├── portal.go             # HTTP-agnostic portal engine (PortalRequest / PortalResponse)
-│   ├── embed.go              # embed.FS — bundle templates ke binary/WASM
 │   ├── simulator.go          # Thin HTTP wrapper di atas Portal (net/http)
-│   ├── go.mod                # module gopkg.gilang.dev/mikrotik/hotspot
+│   ├── embed.go              # embed.FS — bundle templates ke binary/WASM
+│   ├── embed_wasm.go         # WASM-specific embed
+│   ├── go.mod                # module gopkg.gilang.dev/flexor
 │   └── cmd/
 │       ├── cli/main.go       # CLI server — jalankan simulator via flag
 │       └── wasm/main.go      # WASM entry point — export JS API ke browser
 │
-├── editor/                   # React + Vite — web UI virtual browser
+├── editor/                   # React 19 + Vite + Monaco — VS Code-like web editor
 │   ├── src/
-│   │   ├── main.tsx
-│   │   └── App.tsx
-│   ├── public/               # portal.wasm diletakkan di sini setelah build
+│   │   ├── App.tsx           # Root component + all state management
+│   │   ├── types.ts          # Shared types (FileNode, EditorTab, GitHubConfig, etc.)
+│   │   ├── components/
+│   │   │   ├── ActivityBar.tsx      # Left icon strip (explorer/search/github/simulator)
+│   │   │   ├── EditorArea.tsx       # Monaco editor + tabs + welcome screen
+│   │   │   ├── ExplorerPanel.tsx    # File tree (local FS + GitHub mode)
+│   │   │   ├── SearchPanel.tsx      # VS Code-like search & replace
+│   │   │   ├── GitHubPanel.tsx      # GitHub connect / repo browser / commit UI
+│   │   │   ├── SimulatorPanel.tsx   # Hotspot config (users, bandwidth, etc.)
+│   │   │   ├── VirtualBrowser.tsx   # Virtual browser tab
+│   │   │   ├── ProblemsPanel.tsx    # Diagnostics panel
+│   │   │   ├── ImagePreview.tsx     # Image file preview
+│   │   │   └── FileTypeIcon.tsx     # File icon by extension
+│   │   ├── hooks/
+│   │   │   └── useWasm.ts           # WASM loading hook
+│   │   └── utils/
+│   │       ├── fs.ts                # File System Access API helpers + search utils
+│   │       └── github.ts            # GitHub REST API client
+│   ├── public/
+│   │   ├── portal.wasm              # Built WASM (gitignored, must build locally)
+│   │   ├── wasm_exec.js             # Go WASM runtime
+│   │   ├── icon.png                 # App icon
+│   │   └── favicon.png
 │   └── package.json
 │
-└── templates/                # Contoh template captive portal untuk testing
-    └── mikrotik-default/     # Template default MikroTik RouterOS
-        ├── login.html
-        ├── alogin.html
-        ├── logout.html
-        ├── status.html
-        ├── redirect.html
-        ├── rlogin.html
-        ├── radvert.html
-        ├── error.html
-        ├── errors.txt
-        ├── md5.js
-        ├── img/
-        ├── lv/               # Latvian translation
-        └── xml/              # WISP XML response
+├── sc1.png … sc5.png         # Screenshots for README
+├── README.md
+├── MIKROTIK.md               # MikroTik template variable reference
+└── CLAUDE.md                 # This file
 ```
 
 ## Development Commands
@@ -48,19 +62,18 @@ Captive portal emulator that simulates hotspot login flow dari berbagai provider
 ### Engine (Go)
 
 ```bash
-# Masuk ke folder engine
 cd engine
 
-# Jalankan simulator CLI
+# Run CLI simulator
 go run ./cmd/cli/main.go
 
-# Dengan opsi custom
-go run ./cmd/cli/main.go -bind :8080 -users admin:secret,guest:guest -templates ../templates/mikrotik-default
+# With custom options
+go run ./cmd/cli/main.go -bind :8080 -users admin:secret,guest:guest -templates /path/to/template
 
 # Build binary
 go build -o hotspot-sim ./cmd/cli/
 
-# Build WASM
+# Build WASM  ← required before running editor
 GOOS=js GOARCH=wasm go build -o ../editor/public/portal.wasm ./cmd/wasm/
 
 # Test & lint
@@ -75,6 +88,7 @@ cd editor
 npm install
 npm run dev       # dev server http://localhost:5173
 npm run build     # production build
+npx tsc --noEmit  # type-check only
 ```
 
 ## Key Concepts
@@ -99,22 +113,55 @@ hotspot.checkAccess(ip, cookie, url)   // → { action, html, setCookie, targetU
 hotspot.handle(ip, cookie, path, method, formJSON, queryJSON, target)
 hotspot.getStatus(ip, cookie)          // → { username, uptime, bytesIn, ... }
 hotspot.isLoggedIn(ip, cookie)         // → boolean
+hotspot.recordTraffic(ip, cookie, bytesIn, bytesOut)
+hotspot.setAdvertDone(ip, cookie)
 ```
 
 ### Template Engine (`template.go`)
 
 Mensupport sintaks MikroTik:
-- Substitusi variabel: `$(var-name)` dan `$(var-name-esc)`  
+- Substitusi variabel: `$(var-name)` dan `$(var-name-esc)`
 - Kondisional: `$(if expr)` … `$(elif expr)` … `$(else)` … `$(endif)`
 - Kondisi: `varname`, `varname == value`, `varname != value`
 
+### Web Editor Features
+
+- Monaco editor (same engine as VS Code) dengan syntax highlighting
+- File tree: local folder (File System Access API) atau GitHub repo
+- GitHub integration: open public/private repos, commit & push, branch switching
+- Search & Replace: regex, case-sensitive, whole-word, include/exclude patterns
+- Download as ZIP (local or GitHub repo)
+- Virtual browser: simulate captive portal flow in-editor via WASM
+- Simulator panel: configure hotspot users, bandwidth limits, etc.
+
 ### Menambah Provider Baru
 
-1. Buat template baru di `templates/<provider-name>/`
-2. Implementasikan interface jika variabel/syntax berbeda
-3. Tambahkan konstanta `Provider` baru di `mikrotik.go`
+1. Buat template baru (bisa di repo terpisah atau folder lokal)
+2. Tambahkan `ProviderXxx` constant dan variable map di `engine/`
+3. Wire up di CLI flags dan WASM `init` config
+
+## Roadmap
+
+### Near-term
+- [ ] LSP server untuk MikroTik template variables (autocomplete, hover docs)
+- [ ] VS Code extension dengan LSP yang sama
+- [ ] LSP integration di web editor (Monaco language server protocol)
+
+### Provider support
+- [ ] pfSense / OPNsense captive portal
+- [ ] OpenWrt (nodogsplash, coova-chilli)
+- [ ] Generic HTML-only portal
+
+### Infrastructure
+- [ ] Published WASM build (tanpa perlu build lokal)
+- [ ] One-click deploy ke Vercel / Cloudflare Pages
 
 ## Notes
-- `embed.go` meng-embed seluruh folder `templates/` ke dalam binary/WASM saat compile time
-- WASM menggunakan embedded templates — tidak butuh akses disk
-- CLI server membaca template dari disk (bisa di-override dengan flag `-templates`)
+- `templates/` folder **tidak ada** di repo ini — pengguna bawa template sendiri
+- Community template repos: github.com/gilang-as/router-os-default-hotspot-new, github.com/gilang-as/router-os-default-hotspot, github.com/gilang-as/mikrotik-hotspot-template-pink
+- `embed.go` punya `var DefaultTemplates embed.FS` kosong (tidak ada `//go:embed`)
+- WASM: `embed_wasm.go` punya `var DefaultTemplates fs.FS = nil` — templates di-inject dari browser
+- CLI server membaca template dari disk via flag `-templates` (default `../templates/mikrotik-default-v7` — tidak ada, harus di-set manual)
+- Pre-existing TS error: `App.tsx` (showDirectoryPicker) dan `utils/fs.ts` (entries) — Web API types, bukan blocking
+- GitHub auth: Fine-grained PAT disimpan di `localStorage` sebagai `gh_token`; token kosong = public read-only
+

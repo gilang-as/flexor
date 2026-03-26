@@ -1,14 +1,26 @@
 import { useState, useCallback } from 'react'
+import JSZip from 'jszip'
 import ActivityBar from './components/ActivityBar'
 import type { View } from './components/ActivityBar'
 import ExplorerPanel from './components/ExplorerPanel'
 import SearchPanel from './components/SearchPanel'
 import SimulatorPanel from './components/SimulatorPanel'
+import GitHubPanel from './components/GitHubPanel'
 import EditorArea from './components/EditorArea'
 import ProblemsPanel, { MOCK_DIAGNOSTICS } from './components/ProblemsPanel'
-import type { FileNode, EditorTab, Diagnostic, SimConfig } from './types'
+import type { FileNode, EditorTab, Diagnostic, SimConfig, GitHubConfig } from './types'
 import { DEFAULT_SIM_CONFIG, BROWSER_TAB_PATH } from './types'
-import { readDirectory, readTextFiles } from './utils/fs'
+import { readDirectory, readTextFiles, writeFileContentByPath } from './utils/fs'
+import { IGNORE } from './utils/fs'
+import {
+  getAuthenticatedUser,
+  getDefaultBranch,
+  getBranchRef,
+  getRepoTree,
+  getFileContent,
+  commitAndPush,
+  buildFileTree,
+} from './utils/github'
 import './App.css'
 
 function TitleBar({ activeTabPath }: { activeTabPath: string | null }) {
@@ -33,6 +45,9 @@ function StatusBar({
   browserTabOpen,
   onOpenBrowser,
   hasProject,
+  githubConfig,
+  pendingCount,
+  onOpenGitHub,
 }: {
   activeTab: EditorTab | undefined
   rootName: string
@@ -42,6 +57,9 @@ function StatusBar({
   browserTabOpen: boolean
   onOpenBrowser: () => void
   hasProject: boolean
+  githubConfig: GitHubConfig | null
+  pendingCount: number
+  onOpenGitHub: () => void
 }) {
   return (
     <div className="status-bar">
@@ -53,6 +71,15 @@ function StatusBar({
             </svg>
             {rootName}
           </span>
+        )}
+        {githubConfig && (
+          <button className="status-item status-branch-btn" onClick={onOpenGitHub} title="GitHub branch">
+            <svg viewBox="0 0 16 16" width="13" height="13" fill="currentColor">
+              <path fillRule="evenodd" d="M11.75 2.5a.75.75 0 100 1.5.75.75 0 000-1.5zm-2.25.75a2.25 2.25 0 113 2.122V6A2.5 2.5 0 019 8.5H7.5A1 1 0 006.5 9.5v1.128a2.251 2.251 0 11-1.5 0V9.5A2.5 2.5 0 017.5 7H9A1 1 0 0010 6V5.372a2.25 2.25 0 01-0.5-2.122zM4.25 12a.75.75 0 100 1.5.75.75 0 000-1.5zM3.5 3.25a.75.75 0 111.5 0 .75.75 0 01-1.5 0z" />
+            </svg>
+            {githubConfig.branch}
+            {pendingCount > 0 && <span className="status-pending-dot" title={`${pendingCount} pending changes`}>{pendingCount}↑</span>}
+          </button>
         )}
         <button className="status-item status-diagnostics" onClick={onToggleProblems} title="Toggle Problems panel">
           <svg viewBox="0 0 16 16" width="13" height="13" fill="currentColor">
@@ -98,6 +125,11 @@ export default function App() {
   const [activeTabPath, setActiveTabPath] = useState<string | null>(null)
   const [navigateTo, setNavigateTo] = useState<{ line: number; token: number } | null>(null)
   const [problemsOpen, setProblemsOpen] = useState(false)
+
+  // ── GitHub state ──────────────────────────────────────────────────────────
+  const [githubConfig, setGithubConfig] = useState<GitHubConfig | null>(null)
+  // pending changes: path → new content (to be committed)
+  const [githubPending, setGithubPending] = useState<Record<string, string>>({})
   const [diagnostics] = useState<Diagnostic[]>(MOCK_DIAGNOSTICS)
   const [simConfig, setSimConfig] = useState<SimConfig>(DEFAULT_SIM_CONFIG)
   const [templateFiles, setTemplateFiles] = useState<Record<string, string>>({})
@@ -117,7 +149,7 @@ export default function App() {
   }, [])
 
   // When project is closed, go back to explorer view
-  const hasProject = rootHandle !== null
+  const hasProject = rootHandle !== null || githubConfig !== null
 
   const handleOpenFile = useCallback((tab: EditorTab, line?: number) => {
     setTabs(prev => {
@@ -149,21 +181,198 @@ export default function App() {
 
   const handleSave = useCallback(async (path: string, content: string) => {
     const tab = tabs.find(t => t.path === path)
-    if (!tab || !tab.handle) return
+    if (!tab) return
+
+    // ── GitHub mode: stage the change ────────────────────────────────────────
+    if (githubConfig && !tab.handle) {
+      setGithubPending(prev => ({ ...prev, [path]: content }))
+      setTabs(prev => prev.map(t => t.path === path ? { ...t, isDirty: false } : t))
+      setTemplateFiles(prev => ({ ...prev, [path]: content }))
+      return
+    }
+
+    // ── Local mode: write to disk ─────────────────────────────────────────────
+    if (!tab.handle) return
     try {
       const writable = await tab.handle.createWritable()
       await writable.write(content)
       await writable.close()
       setTabs(prev => prev.map(t => t.path === path ? { ...t, isDirty: false } : t))
-      // Sync saved content into templateFiles so WASM hot-reloads the template
       setTemplateFiles(prev => ({ ...prev, [path]: content }))
     } catch (e) {
       console.error('Save failed:', e)
     }
-  }, [tabs])
+  }, [tabs, githubConfig])
+
+  // ── GitHub handlers ───────────────────────────────────────────────────────
+
+  /** Validate token by calling /user */
+  const handleGitHubConnect = useCallback(async (token: string) => {
+    await getAuthenticatedUser(token) // throws if invalid
+  }, [])
+
+  /** Load a repo's file tree and all text files for WASM */
+  const handleOpenFromGitHub = useCallback(async (owner: string, repo: string, branch: string) => {
+    const token = localStorage.getItem('gh_token') ?? ''
+    const defaultBranch = branch || await getDefaultBranch(token, owner, repo)
+    const { treeSha } = await getBranchRef(token, owner, repo, defaultBranch)
+    const items = await getRepoTree(token, owner, repo, treeSha)
+    const tree = buildFileTree(items)
+
+    // Eagerly load all text files for WASM
+    const textFiles: Record<string, string> = {}
+    const blobs = items.filter(i => i.type === 'blob')
+    await Promise.all(
+      blobs.map(async item => {
+        const ext = item.path.split('.').pop()?.toLowerCase() ?? ''
+        const textExts = ['html', 'htm', 'txt', 'js', 'css', 'json', 'xml', 'xsd', 'md', 'ts', 'tsx']
+        if (textExts.includes(ext)) {
+          try {
+            textFiles[item.path] = await getFileContent(token, owner, repo, item.path, defaultBranch)
+          } catch { /* skip */ }
+        }
+      }),
+    )
+
+    setGithubConfig({ token, owner, repo, branch: defaultBranch })
+    setGithubPending({})
+    setRootHandle(null)
+    setRootName(`${owner}/${repo}`)
+    setFileTree(tree)
+    setTemplateFiles(textFiles)
+    setTabs([])
+    setActiveTabPath(null)
+    setView('explorer')
+  }, [])
+
+  /** Switch to a different branch */
+  const handleSwitchBranch = useCallback(async (branch: string) => {
+    if (!githubConfig) return
+    const { token, owner, repo } = githubConfig
+    const { treeSha } = await getBranchRef(token, owner, repo, branch)
+    const items = await getRepoTree(token, owner, repo, treeSha)
+    const tree = buildFileTree(items)
+
+    const textFiles: Record<string, string> = {}
+    const blobs = items.filter(i => i.type === 'blob')
+    await Promise.all(
+      blobs.map(async item => {
+        const ext = item.path.split('.').pop()?.toLowerCase() ?? ''
+        const textExts = ['html', 'htm', 'txt', 'js', 'css', 'json', 'xml', 'xsd', 'md', 'ts', 'tsx']
+        if (textExts.includes(ext)) {
+          try {
+            textFiles[item.path] = await getFileContent(token, owner, repo, item.path, branch)
+          } catch { /* skip */ }
+        }
+      }),
+    )
+
+    setGithubConfig(prev => prev ? { ...prev, branch } : prev)
+    setGithubPending({})
+    setFileTree(tree)
+    setTemplateFiles(textFiles)
+    setTabs([])
+    setActiveTabPath(null)
+  }, [githubConfig])
+
+  /** Commit and push all pending changes */
+  const handleCommitAndPush = useCallback(async (message: string) => {
+    if (!githubConfig) return
+    const changes = Object.entries(githubPending).map(([path, content]) => ({ path, content }))
+    if (changes.length === 0) return
+    await commitAndPush(
+      githubConfig.token,
+      githubConfig.owner,
+      githubConfig.repo,
+      githubConfig.branch,
+      changes,
+      message,
+    )
+    setGithubPending({})
+  }, [githubConfig, githubPending])
+
+  /** Disconnect from GitHub and clear all state */
+  const handleGitHubDisconnect = useCallback(() => {
+    setGithubConfig(null)
+    setGithubPending({})
+    setRootName('')
+    setFileTree([])
+    setTemplateFiles({})
+    setTabs([])
+    setActiveTabPath(null)
+  }, [])
+
+  /** Open a public repo without a token (read-only) */
+  const handleOpenPublicRepo = useCallback(async (owner: string, repo: string) => {
+    await handleOpenFromGitHub(owner, repo, '')
+  }, [handleOpenFromGitHub])
+
+  /** Add token to an already-open public repo (upgrade to read-write) */
+  const handleAddToken = useCallback(async (token: string) => {
+    if (!githubConfig) return
+    // Verify token works
+    await getAuthenticatedUser(token)
+    setGithubConfig(prev => prev ? { ...prev, token } : prev)
+  }, [githubConfig])
+
+  /** Replace file content — used by SearchPanel for replace-all */
+  const handleReplaceInFile = useCallback(async (filePath: string, newContent: string) => {
+    // Update tab if open
+    setTabs(prev => prev.map(t => t.path === filePath ? { ...t, content: newContent, isDirty: false } : t))
+    setTemplateFiles(prev => ({ ...prev, [filePath]: newContent }))
+    if (githubConfig && !rootHandle) {
+      setGithubPending(prev => ({ ...prev, [filePath]: newContent }))
+    } else if (rootHandle) {
+      await writeFileContentByPath(rootHandle, filePath, newContent)
+    }
+  }, [githubConfig, rootHandle])
 
   const activeTab = tabs.find(t => t.path === activeTabPath)
   const browserTabOpen = tabs.some(t => t.path === BROWSER_TAB_PATH)
+  const githubPendingCount = Object.keys(githubPending).length
+
+  /** Download all project files as a ZIP archive */
+  const handleDownloadZip = useCallback(async () => {
+    const zip = new JSZip()
+    const name = (rootName || 'project').replace(/\//g, '-')
+
+    if (rootHandle) {
+      // Local mode: recursively read all files including binary
+      const addDir = async (dirHandle: FileSystemDirectoryHandle, basePath: string) => {
+        for await (const [entryName, handle] of (dirHandle as any).entries()) {
+          if (IGNORE.has(entryName)) continue
+          const path = basePath ? `${basePath}/${entryName}` : entryName
+          if (handle.kind === 'directory') {
+            await addDir(handle as FileSystemDirectoryHandle, path)
+          } else {
+            const file = await (handle as FileSystemFileHandle).getFile()
+            zip.file(path, file)
+          }
+        }
+      }
+      await addDir(rootHandle, '')
+    } else if (githubConfig) {
+      // GitHub mode: zip from templateFiles (text + data-URL images)
+      for (const [path, content] of Object.entries(templateFiles)) {
+        if (content.startsWith('data:')) {
+          const base64 = content.split(',')[1]
+          zip.file(path, base64, { base64: true })
+        } else {
+          zip.file(path, content)
+        }
+      }
+    } else {
+      return
+    }
+
+    const blob = await zip.generateAsync({ type: 'blob' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `${name}.zip`
+    a.click()
+    URL.revokeObjectURL(url)
+  }, [rootHandle, githubConfig, templateFiles, rootName])
 
   const handleOpenBrowser = useCallback(() => {
     setTabs(prev => {
@@ -196,24 +405,65 @@ export default function App() {
     <div className="app">
       <TitleBar activeTabPath={activeTabPath} />
       <div className="app-body">
-        <ActivityBar activeView={view} onViewChange={setView} hasProject={hasProject} onOpenBrowser={handleOpenBrowser} />
+        <ActivityBar
+          activeView={view}
+          onViewChange={setView}
+          hasProject={hasProject}
+          onOpenBrowser={handleOpenBrowser}
+          githubPendingCount={githubPendingCount}
+        />
         <div className="sidebar" style={{ display: view === 'simulator' ? 'none' : undefined }}>
           <div className="sidebar-header">
-            {view === 'explorer' ? (rootName.toUpperCase() || 'EXPLORER') : 'SEARCH'}
+            <span>
+              {view === 'explorer' ? (rootName.toUpperCase() || 'EXPLORER')
+                : view === 'github' ? 'GITHUB'
+                : 'SEARCH'}
+            </span>
+            {view === 'explorer' && hasProject && (
+              <button
+                className="sidebar-action-btn"
+                onClick={handleDownloadZip}
+                title="Download as ZIP"
+              >
+                <svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor">
+                  <path d="M7.47 10.78a.75.75 0 001.06 0l3.75-3.75a.75.75 0 00-1.06-1.06L8.75 8.44V1.75a.75.75 0 00-1.5 0v6.69L4.78 5.97a.75.75 0 00-1.06 1.06l3.75 3.75zM1.75 13.5a.75.75 0 000 1.5h12.5a.75.75 0 000-1.5H1.75z"/>
+                </svg>
+              </button>
+            )}
           </div>
-          {view === 'explorer' ? (
+          {view === 'explorer' && (
             <ExplorerPanel
               rootHandle={rootHandle}
               fileTree={fileTree}
               activeFilePath={activeTabPath}
               onOpenFolder={handleOpenFolder}
+              onOpenFromGitHub={() => setView('github')}
               onUpdateTree={setFileTree}
               onOpenFile={handleOpenFile}
+              githubConfig={githubConfig}
             />
-          ) : (
+          )}
+          {view === 'search' && (
             <SearchPanel
               rootHandle={rootHandle}
+              githubConfig={githubConfig}
+              templateFiles={templateFiles}
               onOpenFile={handleOpenFile}
+              onReplaceInFile={handleReplaceInFile}
+            />
+          )}
+          {view === 'github' && (
+            <GitHubPanel
+              githubConfig={githubConfig}
+              pendingCount={githubPendingCount}
+              onConnect={handleGitHubConnect}
+              onDisconnect={handleGitHubDisconnect}
+              onOpenRepo={handleOpenFromGitHub}
+              onOpenPublicRepo={handleOpenPublicRepo}
+              onCloseRepo={handleGitHubDisconnect}
+              onSwitchBranch={handleSwitchBranch}
+              onCommitAndPush={handleCommitAndPush}
+              onAddToken={handleAddToken}
             />
           )}
         </div>
@@ -250,6 +500,9 @@ export default function App() {
         browserTabOpen={browserTabOpen}
         onOpenBrowser={handleOpenBrowser}
         hasProject={hasProject}
+        githubConfig={githubConfig}
+        pendingCount={githubPendingCount}
+        onOpenGitHub={() => setView('github')}
       />
     </div>
   )

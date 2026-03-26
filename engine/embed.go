@@ -1,6 +1,6 @@
 //go:build !js
 
-package mikrotikhotspot
+package flexor
 
 import "embed"
 

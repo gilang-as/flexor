@@ -7,13 +7,13 @@ import (
 	"os"
 	"strings"
 
-	mikrotikhotspot "gopkg.gilang.dev/mikrotik/hotspot"
+	"gopkg.gilang.dev/flexor"
 )
 
 func main() {
 	var (
 		bind        = flag.String("bind", ":8080", "Address to listen on (e.g. :8080)")
-		templateDir = flag.String("templates", "../templates/mikrotik-default-v7", "Path to hotspot template directory")
+		templateDir = flag.String("templates", "", "Path to hotspot template directory (required)")
 		hostname    = flag.String("hostname", "127.0.0.1:8080", "Hostname shown in hotspot links")
 		identity    = flag.String("identity", "MikroTik", "RouterOS identity name")
 		serverName  = flag.String("server-name", "hotspot1", "HotSpot server name")
@@ -29,7 +29,14 @@ func main() {
 	}
 	flag.Parse()
 
-	cfg := mikrotikhotspot.DefaultConfig()
+	if *templateDir == "" {
+		fmt.Fprintln(os.Stderr, "error: -templates flag is required (path to hotspot template directory)")
+		fmt.Fprintln(os.Stderr, "  Example: hotspot-sim -templates ./my-template")
+		fmt.Fprintln(os.Stderr, "  Get a template: https://github.com/gilang-as/router-os-default-hotspot-new")
+		os.Exit(1)
+	}
+
+	cfg := flexor.DefaultConfig()
 	cfg.BindAddress = *bind
 	cfg.TemplateDir = *templateDir
 	cfg.Hostname = *hostname
@@ -38,7 +45,7 @@ func main() {
 	cfg.ServerAddress = *hostname
 	cfg.AllowTrial = *allowTrial
 
-	sim := mikrotikhotspot.NewSimulator(cfg)
+	sim := flexor.NewSimulator(cfg)
 
 	for _, pair := range strings.Split(*users, ",") {
 		pair = strings.TrimSpace(pair)

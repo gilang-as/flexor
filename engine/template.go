@@ -1,4 +1,4 @@
-package mikrotikhotspot
+package flexor
 
 import (
 	"strings"

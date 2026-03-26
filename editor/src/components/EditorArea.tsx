@@ -1,4 +1,4 @@
-import { useEffect, useRef, useCallback } from 'react'
+import { useEffect, useRef, useCallback, useState } from 'react'
 import Editor, { type OnMount } from '@monaco-editor/react'
 import type { EditorTab, SimConfig } from '../types'
 import ImagePreview from './ImagePreview'
@@ -78,14 +78,46 @@ export default function EditorArea({
     }
   }, [])
 
+  const [aboutOpen, setAboutOpen] = useState(false)
+
   if (tabs.length === 0) {
     return (
       <div className="editor-area">
         <div className="editor-welcome">
-          <h1>Web Editor</h1>
+          <img src="/icon.png" alt="Flexor" className="editor-welcome-logo" />
           <p>Open a folder from the Explorer to start editing</p>
           <p className="editor-welcome-hint">Ctrl+S / ⌘S to save · File System Access API (Chrome/Edge)</p>
+          <button className="editor-welcome-about-btn" onClick={() => setAboutOpen(true)}>About</button>
         </div>
+
+        {aboutOpen && (
+          <div className="about-overlay" onClick={() => setAboutOpen(false)}>
+            <div className="about-modal" onClick={e => e.stopPropagation()}>
+              <button className="about-close" onClick={() => setAboutOpen(false)} title="Close">✕</button>
+              <img src="/icon.png" alt="Flexor" className="about-logo" />
+              <h2 className="about-title">Flexor</h2>
+              <p className="about-version">v0.1.0</p>
+              <p className="about-desc">
+                Web-based editor &amp; captive portal emulator for MikroTik hotspot templates.
+                Edit, preview and simulate RouterOS hotspot pages directly in your browser.
+              </p>
+              <div className="about-meta">
+                <span className="about-author">Made by <strong>Gilang Adi S</strong></span>
+                <a
+                  className="about-github"
+                  href="https://github.com/gilang-as/flexor"
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  <svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor">
+                    <path d="M8 .198C3.582.198 0 3.78 0 8.198c0 3.536 2.292 6.533 5.47 7.59.4.074.548-.173.548-.386 0-.19-.007-.693-.01-1.36-2.226.483-2.695-1.073-2.695-1.073-.364-.924-.888-1.17-.888-1.17-.726-.497.055-.486.055-.486.803.056 1.226.824 1.226.824.713 1.222 1.871.869 2.328.664.072-.517.279-.869.507-1.069-1.775-.202-3.643-.887-3.643-3.95 0-.873.312-1.587.823-2.147-.082-.202-.357-1.015.078-2.117 0 0 .672-.215 2.2.82A7.67 7.67 0 018 4.068c.68.003 1.364.092 2.003.269 1.527-1.035 2.198-.82 2.198-.82.436 1.102.161 1.915.079 2.117.513.56.822 1.274.822 2.147 0 3.07-1.87 3.746-3.653 3.944.288.248.543.735.543 1.481 0 1.07-.01 1.932-.01 2.194 0 .214.145.463.55.385C13.71 14.728 16 11.732 16 8.198 16 3.78 12.418.198 8 .198z" />
+                  </svg>
+                  github.com/gilang-as/flexor
+                </a>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     )
   }

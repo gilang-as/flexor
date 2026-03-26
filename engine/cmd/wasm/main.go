@@ -15,10 +15,10 @@ import (
 	"syscall/js"
 	"time"
 
-	hs "gopkg.gilang.dev/mikrotik/hotspot"
+	"gopkg.gilang.dev/flexor"
 )
 
-var portal *hs.Portal
+var portal *flexor.Portal
 
 func main() {
 	// Expose the API on the global `hotspot` object.
@@ -61,7 +61,7 @@ func main() {
 //	  templates?:     Record<string, string>, // filename → HTML/text content
 //	})
 func apiInit(_ js.Value, args []js.Value) any {
-	cfg := hs.DefaultConfig()
+	cfg := flexor.DefaultConfig()
 
 	var fsys fs.FS // nil = no templates; portal will return "Template not found"
 
@@ -105,7 +105,7 @@ func apiInit(_ js.Value, args []js.Value) any {
 		}
 	}
 
-	portal = hs.NewPortalWithFS(cfg, fsys)
+	portal = flexor.NewPortalWithFS(cfg, fsys)
 
 	if len(args) > 0 && args[0].Type() == js.TypeObject {
 		obj := args[0]
@@ -119,7 +119,7 @@ func apiInit(_ js.Value, args []js.Value) any {
 				if id == "" {
 					continue
 				}
-				pc := &hs.ProfileConfig{}
+				pc := &flexor.ProfileConfig{}
 				if v := p.Get("sessionTimeout"); v.Type() == js.TypeString && v.String() != "" {
 					if d, err := time.ParseDuration(v.String()); err == nil {
 						pc.SessionTimeout = d
@@ -196,7 +196,7 @@ func apiCheckAccess(_ js.Value, args []js.Value) any {
 //   - target    — template sub-directory, e.g. "lv" for Latvian  (pass "" for default)
 func apiHandle(_ js.Value, args []js.Value) any {
 	ensureInit()
-	req := hs.PortalRequest{
+	req := flexor.PortalRequest{
 		ClientIP: strArg(args, 0),
 		Cookie:   strArg(args, 1),
 		Path:     strArg(args, 2),
@@ -231,11 +231,11 @@ func apiGetStatus(_ js.Value, args []js.Value) any {
 		"ip":                 sess.IP,
 		"mac":                sess.MAC,
 		"loginBy":            sess.LoginBy,
-		"uptime":             hs.FormatDuration(uptime),
+		"uptime":             flexor.FormatDuration(uptime),
 		"uptimeSec":          int(uptime.Seconds()),
 		"bytesIn":            sess.BytesIn,
 		"bytesOut":           sess.BytesOut,
-		"sessionTimeLeft":    hs.FormatDuration(timeLeft),
+		"sessionTimeLeft":    flexor.FormatDuration(timeLeft),
 		"sessionTimeLeftSec": int(timeLeft.Seconds()),
 		"blocked":            sess.Blocked,
 		"limitBytesIn":       sess.LimitBytesIn,
@@ -256,8 +256,8 @@ func apiIsLoggedIn(_ js.Value, args []js.Value) any {
 // ensureInit creates a default portal if apiInit was never called.
 func ensureInit() {
 	if portal == nil {
-		cfg := hs.DefaultConfig()
-		portal = hs.NewPortalWithFS(cfg, hs.DefaultTemplates)
+		cfg := flexor.DefaultConfig()
+		portal = flexor.NewPortalWithFS(cfg, flexor.DefaultTemplates)
 		portal.AddUser("admin", "admin")
 	}
 }
@@ -280,7 +280,7 @@ func parseJSONMap(s string) map[string]string {
 	return m
 }
 
-func responseToJS(resp hs.PortalResponse) map[string]any {
+func responseToJS(resp flexor.PortalResponse) map[string]any {
 	return map[string]any{
 		"action":    resp.Action,
 		"html":      resp.HTML,

@@ -1,6 +1,6 @@
 import type { FileNode, SearchResult } from '../types'
 
-const IGNORE = new Set(['.git', 'node_modules', '.DS_Store', '__pycache__', 'dist', '.next'])
+export const IGNORE = new Set(['.git', 'node_modules', '.DS_Store', '__pycache__', 'dist', '.next'])
 
 const TEXT_EXTS = new Set([
   'js', 'mjs', 'cjs', 'ts', 'tsx', 'jsx',
@@ -128,10 +128,177 @@ export async function searchInDirectory(
   return results
 }
 
+// ── Enhanced search (with options) ───────────────────────────────────────────
+
+export type SearchOptions = {
+  useRegex: boolean
+  caseSensitive: boolean
+  wholeWord: boolean
+  includePattern: string
+  excludePattern: string
+}
+
+export const DEFAULT_SEARCH_OPTS: SearchOptions = {
+  useRegex: false,
+  caseSensitive: false,
+  wholeWord: false,
+  includePattern: '',
+  excludePattern: '',
+}
+
+export function buildSearchRegex(
+  query: string,
+  opts: Pick<SearchOptions, 'useRegex' | 'caseSensitive' | 'wholeWord'>,
+): RegExp | null {
+  if (!query) return null
+  try {
+    let pattern = opts.useRegex ? query : query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    if (opts.wholeWord) pattern = `\\b${pattern}\\b`
+    const flags = 'g' + (opts.caseSensitive ? '' : 'i')
+    return new RegExp(pattern, flags)
+  } catch {
+    return null
+  }
+}
+
+function fileMatchesPattern(filePath: string, fileName: string, pattern: string): boolean {
+  const p = pattern.trim()
+  if (!p) return true
+  // *.ext  →  extension match
+  if (p.startsWith('*.')) return fileName.endsWith(p.slice(1))
+  // dir/**  or  dir/  →  path prefix
+  const dirPart = p.endsWith('/**') ? p.slice(0, -3) : p.endsWith('/') ? p.slice(0, -1) : null
+  if (dirPart !== null) return filePath.startsWith(dirPart + '/') || filePath === dirPart
+  // plain substring match on path or filename
+  return filePath.includes(p) || fileName.includes(p)
+}
+
+function matchesPatterns(filePath: string, fileName: string, include: string, exclude: string): boolean {
+  if (exclude.trim()) {
+    const pats = exclude.split(',').map(s => s.trim()).filter(Boolean)
+    if (pats.some(p => fileMatchesPattern(filePath, fileName, p))) return false
+  }
+  if (include.trim()) {
+    const pats = include.split(',').map(s => s.trim()).filter(Boolean)
+    if (!pats.some(p => fileMatchesPattern(filePath, fileName, p))) return false
+  }
+  return true
+}
+
+export async function searchInDirectoryAdvanced(
+  dirHandle: FileSystemDirectoryHandle,
+  query: string,
+  opts: SearchOptions = DEFAULT_SEARCH_OPTS,
+  path = '',
+  results: SearchResult[] = [],
+  maxResults = 500,
+): Promise<SearchResult[]> {
+  if (results.length >= maxResults) return results
+  const regex = buildSearchRegex(query, opts)
+  if (!regex) return results
+
+  for await (const [name, handle] of (dirHandle as any).entries()) {
+    if (results.length >= maxResults) break
+    if (IGNORE.has(name)) continue
+    const filePath = path ? `${path}/${name}` : name
+    if (handle.kind === 'directory') {
+      await searchInDirectoryAdvanced(handle as FileSystemDirectoryHandle, query, opts, filePath, results, maxResults)
+    } else if (isTextFile(name) && matchesPatterns(filePath, name, opts.includePattern, opts.excludePattern)) {
+      try {
+        const file = await (handle as FileSystemFileHandle).getFile()
+        const text = await file.text()
+        const lines = text.split('\n')
+        for (let i = 0; i < lines.length && results.length < maxResults; i++) {
+          regex.lastIndex = 0
+          const match = regex.exec(lines[i])
+          if (match) {
+            results.push({
+              filePath,
+              fileName: name,
+              line: i + 1,
+              lineContent: lines[i],
+              matchStart: match.index,
+              matchEnd: match.index + match[0].length,
+            })
+          }
+        }
+      } catch {
+        // skip unreadable/binary files
+      }
+    }
+  }
+  return results
+}
+
+export function searchInFiles(
+  files: Record<string, string>,
+  query: string,
+  opts: SearchOptions = DEFAULT_SEARCH_OPTS,
+  maxResults = 500,
+): SearchResult[] {
+  const regex = buildSearchRegex(query, opts)
+  if (!regex) return []
+  const results: SearchResult[] = []
+  for (const [filePath, content] of Object.entries(files)) {
+    if (results.length >= maxResults) break
+    if (content.startsWith('data:')) continue   // skip binary data URLs
+    const fileName = filePath.split('/').pop() ?? filePath
+    if (!isTextFile(fileName)) continue
+    if (!matchesPatterns(filePath, fileName, opts.includePattern, opts.excludePattern)) continue
+    const lines = content.split('\n')
+    for (let i = 0; i < lines.length && results.length < maxResults; i++) {
+      regex.lastIndex = 0
+      const match = regex.exec(lines[i])
+      if (match) {
+        results.push({
+          filePath,
+          fileName,
+          line: i + 1,
+          lineContent: lines[i],
+          matchStart: match.index,
+          matchEnd: match.index + match[0].length,
+        })
+      }
+    }
+  }
+  return results
+}
+
+export async function readFileContentByPath(
+  rootHandle: FileSystemDirectoryHandle,
+  filePath: string,
+): Promise<string> {
+  const parts = filePath.split('/')
+  let dir: FileSystemDirectoryHandle = rootHandle
+  for (let i = 0; i < parts.length - 1; i++) {
+    dir = await dir.getDirectoryHandle(parts[i])
+  }
+  const fileHandle = await dir.getFileHandle(parts[parts.length - 1])
+  const file = await fileHandle.getFile()
+  return file.text()
+}
+
+export async function writeFileContentByPath(
+  rootHandle: FileSystemDirectoryHandle,
+  filePath: string,
+  content: string,
+): Promise<void> {
+  const parts = filePath.split('/')
+  let dir: FileSystemDirectoryHandle = rootHandle
+  for (let i = 0; i < parts.length - 1; i++) {
+    dir = await dir.getDirectoryHandle(parts[i])
+  }
+  const fileHandle = await dir.getFileHandle(parts[parts.length - 1])
+  const writable = await fileHandle.createWritable()
+  await writable.write(content)
+  await writable.close()
+}
+
 /**
- * Recursively read all text files from a directory handle.
- * Returns a flat map of { relativePath: textContent }.
- * Binary and ignored files are skipped.
+ * Recursively read all text + image files from a directory handle.
+ * Returns a flat map of { relativePath: content }.
+ *   - Text files  → raw text content
+ *   - Image files → data URL  (e.g. "data:image/png;base64,...")
  */
 export async function readTextFiles(
   dirHandle: FileSystemDirectoryHandle,
@@ -148,6 +315,12 @@ export async function readTextFiles(
       try {
         const file = await (handle as FileSystemFileHandle).getFile()
         result[filePath] = await file.text()
+      } catch {
+        // skip unreadable files
+      }
+    } else if (isImageFile(name)) {
+      try {
+        result[filePath] = await readFileAsDataURL(handle as FileSystemFileHandle)
       } catch {
         // skip unreadable files
       }
